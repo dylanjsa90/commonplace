@@ -1,30 +1,37 @@
 # Commonplace
 
-A full-stack personal bookmark library built with React, Vinext, TypeScript, and Cloudflare D1. Hosted by Sites with ChatGPT sign-in. All reads and writes are scoped to the signed-in visitor's stable user ID.
+A full-stack personal bookmark library deployed to Cloudflare Workers with a Cloudflare D1 database. Built with React, Vinext, TypeScript, and Cloudflare's Vite plugin.
 
-## What it does
+Production: https://commonplace-library.dylanjsanders1.workers.dev
 
-- Saves an HTTP(S) URL with an optional note and an immutable save timestamp.
-- Persists the bookmark before capture, so failed fetches do not lose it.
-- Fetches public HTML or plain-text pages server-side, follows validated redirects, and extracts title, description, preview image, metadata, and readable page text.
-- Runs an extractive sentence-ranking summarizer and a topic classifier. No API key or external AI provider is required.
-- Supports chronological list and raw table views, topic collections, search, sorting, capture-status filters, favorites, editable notes, and deletion.
-- Lets you inspect saved text and metadata, retry capture, and export the complete library as JSON.
-- Starts with an empty database. The clearly labeled example library is an optional frontend preview; example content is never inserted into the database.
+## Features
 
-## Local development
+- Save HTTP(S) links with optional notes and immutable save dates.
+- Bulk import up to 100 URLs, one per line, with live progress, duplicate skipping, three concurrent captures, stop/resume, and retry for unsaved links. Saved links with capture issues remain available for recapture in their details.
+- Capture webpage metadata and readable text server-side, with retryable errors.
+- Extract summaries from source sentences and classify up to three topics.
+- Browse chronological links, raw tables, topic collections, and favorites.
+- Search titles, URLs, notes, summaries, and topic names; sort and filter captures.
+- Inspect saved text and metadata, edit notes, delete links, and export JSON.
+- Email/password authentication with signed JWT sessions. Libraries are isolated by user ID.
+- Create an account directly with your name, email, and password. The optional example library never inserts sample bookmarks into the database.
+
+## Run locally
 
 Requires Node.js 22.13 or later.
 
 ```sh
 npm run install:ci
-npm run db:generate
-npm run build
-node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js d1 execute DB --local --config dist/server/wrangler.json --persist-to .wrangler/state --file drizzle/0000_misty_nitro.sql
+```
+
+Create an ignored `.dev.vars` file containing `JWT_SECRET` with at least 32 random characters. The configured local project already has a development secret; production uses a separate Cloudflare secret.
+
+```sh
+npm run cf:migrate:local
 npm run dev
 ```
 
-Visit the printed loopback URL. The portable starter simulates sign-in at `/signin-with-chatgpt?return_to=/`. Local sign-in and database state are separate from production. Apply the initial migration once; apply only new pending migrations after schema changes. The tracked SQL and Drizzle journal are deployed through Sites automatically.
+The dev server uses http://127.0.0.1:5174. Visit `/register` and choose your password. Local data and credentials are separate from production.
 
 ```sh
 npm test
@@ -32,31 +39,60 @@ npx tsc --noEmit
 npm run build
 ```
 
-The tests cover private-address rejection, metadata extraction, source-based summarization, overlapping topics, partial captures, private redirects, DNS validation, unsupported file types, and capture size limits. Browser QA additionally covers real capture, notes, favorites, reload persistence, topic navigation, raw tables, duplicate URLs, authorization, export, and mobile layout.
+## Deployment
 
-## Data and API
+The tracked `wrangler.jsonc` declares the Worker, account, D1 binding, migration directory, assets, and password auth mode. It contains no secrets. Resources have already been provisioned in the connected Cloudflare account.
 
-`bookmarks` stores the source URL, note, save time, fetched time, capture status, title, description, summary, raw text, metadata JSON, image URL, favorite flag, and word count. `topics` and `bookmark_topics` hold per-user topic collections and their many-to-many relationships. The URL is unique per user; fragments are removed while meaningful query parameters are preserved.
+```sh
+npm run cf:login
+npm run deploy
+```
+
+The deployment script validates the configuration, applies only pending D1 migrations, builds the Cloudflare Worker, and deploys the built configuration. The initial SQL migrations and Drizzle history must remain immutable. Add later migrations with `npm run db:generate` after changing `db/schema.ts`.
+
+`JWT_SECRET` is configured separately using Wrangler secrets and is never embedded in the browser bundle. Rotate it only when intended: rotation invalidates existing JWTs. For a new environment, generate a strong secret with a password manager or cryptographic random generator and enter it through `wrangler secret put JWT_SECRET`. The Worker denies requests until password authentication and the secret are configured.
+
+## Account creation
+
+Visit `/register` to create an account with your name, email, and a password of at least 12 characters. Registration is open and requires no invitation or email allowlist. Email addresses are normalized to lowercase; duplicate addresses are rejected atomically. Account creation signs you in immediately. Each account's saved library remains private to that account.
+
+## Authentication
+
+Passwords use salted native scrypt with N=16384, r=8, p=5, and a 32-byte derived key. JWTs use HS256 with fixed issuer and audience, subject and session identifiers, and a 24-hour expiry. A matching, unexpired server session must also exist in D1, so logout revokes the JWT immediately.
+
+Production cookies use the `__Host-` prefix, `Secure`, `HttpOnly`, `SameSite=Lax`, and `Path=/`. The local Vite preview uses an HTTP-compatible cookie. JWTs are not exposed to browser JavaScript or stored in localStorage. Login errors do not identify whether an email exists. Authentication attempts are limited to 10 per email and 25 per IP in a 10-minute window. State-changing endpoints validate request origin. Every bookmark operation is authorized against the current user ID.
+
+Cloudflare Access can be enabled as an additional outer gate. Protect the Worker in Cloudflare Zero Trust, then configure both `ACCESS_TEAM_DOMAIN` and `ACCESS_AUD` as Worker variables. The Worker verifies the Access JWT's RS256 signature, issuer, audience, expiry, subject, and user identity against the team's current signing keys. Configuring only one variable denies requests. Password sign-in remains required inside this gate. No Access application is provisioned automatically.
+
+## API
 
 | Endpoint | Behavior |
 | --- | --- |
-| `GET /api/bookmarks` | Library records without raw text payloads |
+| `POST /api/auth/register` | Create `{email, name, password}` account and set session cookie |
+| `POST /api/auth/login` | Authenticate `{email, password}` and set session cookie |
+| `POST /api/auth/logout` | Revoke current session and clear cookie |
+| `GET /api/bookmarks` | Own library records without raw text payloads |
 | `POST /api/bookmarks` | Save and capture `{url, note?}` |
-| `GET /api/bookmarks/:id` | Full record, captured text, metadata, and topics |
-| `PATCH /api/bookmarks/:id` | Edit `{note? , favorite?}` or recapture `{retry:true}` |
-| `DELETE /api/bookmarks/:id` | Delete an owned bookmark and its topic associations |
-| `GET /api/export` | Download complete JSON, including raw page text |
+| `GET /api/bookmarks/:id` | Own full record, text, metadata, topics |
+| `PATCH /api/bookmarks/:id` | Edit `{note?, favorite?}` or recapture `{retry:true}` |
+| `DELETE /api/bookmarks/:id` | Delete owned bookmark and topic associations |
+| `GET /api/export` | Download own library JSON, including saved text |
+| `GET /api/health` | Database and auth readiness, without private data |
 
-API routes require platform-authenticated identity. Mutations validate origin, input types and bounds, and use parameterized SQL. Only a user's own records can be viewed or modified. Extraction output is rendered as escaped text; fetched HTML is never executed. Capture rejects private addresses, unsafe schemes, custom ports, credentials, and redirects to private hosts. DNS resolution is checked through Cloudflare DNS before every fetch.
+## Capture and summarization
 
-## Summarization and capture limits
+The app saves the bookmark before fetching, so network failures preserve the link and note. It fetches public HTML and plain-text pages, validates public DNS addresses and every redirect, removes executable markup, and stores readable text and source metadata. Fetched HTML is never executed or rendered as HTML.
 
-The summarizer ranks existing sentences using term frequency and title/description overlap, selecting up to two source sentences. Topics use a weighted vocabulary of broad interests, with content-derived keywords for unrecognized interests. This is an English-oriented extractive summarizer, not an LLM. It does not invent an abstract or claim full semantic understanding.
+Capture does not run webpage JavaScript, sign into third-party sites, or bypass paywalls. Sparse or blocked pages are labeled explicitly. It allows an 18-second deadline, five redirects, a 3 MB response limit, and 400,000 saved-text characters. Previously saved text survives a failed recapture; metadata indicates truncation.
 
-Capture reads server-rendered content; it does not run browser JavaScript, bypass paywalls, or sign into third-party sites. Blocked pages, sparse text, unsupported file types, and errors are visible and retryable. Each capture has an 18-second deadline, at most five redirects, a 3 MB response limit, and 400,000 captured-text characters. Previously captured text is retained if a refresh fails. `metadata.textTruncated` indicates text truncation. Search matches titles, URLs, notes, summaries, and topic names.
+Summarization ranks source sentences by term frequency and title/description overlap. Topics use weighted interest vocabularies and content-derived keywords. This is an English-oriented extractive summarizer; no external AI provider or API key is required.
 
-The app's production source manifest is `.openai/hosting.json`, with a `DB` D1 binding. Runtime data, dev identity, build output, and temporary QA scripts are excluded from source publication. Sites owns production authentication and provisioning.
+## Verification
+
+Nine automated tests cover password hashing, JWT signatures/expiry/audience/algorithms, URL safety, metadata extraction, extractive summaries, overlapping topics, private redirects/DNS, limited captures, unsupported files, and response-size limits. Browser checks cover direct signup, sign-in, logout revocation, tampering, account isolation, CSRF rejection, rate limits, real capture, notes, favorites, persistence, raw tables, export, and desktop/mobile layouts. Production registration, cookie flags, login/logout, revoked-token rejection, JavaScript/CSS loading, real page capture, and health were verified against the deployed Worker. Temporary QA accounts and bookmarks were removed.
+
+The original Sites starter configuration is retained as historical scaffolding. Direct Cloudflare deployment uses `vite.config.cloudflare.ts`, `worker/cloudflare.ts`, and `wrangler.jsonc`; it does not publish to Sites or depend on ChatGPT sign-in.
 
 ## Example photography
 
-The optional example library uses stock photographs from Unsplash; these are illustrations of the demo and are not presented as fetched article images. Sources: [forest interior](https://images.unsplash.com/photo-1418065460487-3e41a6c84dc5), [forest path](https://images.unsplash.com/photo-1448375240586-882707db888b), [space](https://images.unsplash.com/photo-1462331940025-496dfbfc7564). Real bookmarks use the page's own Open Graph or Twitter preview image when available.
+The optional example library uses illustrative stock photography from Unsplash: https://images.unsplash.com/photo-1418065460487-3e41a6c84dc5, https://images.unsplash.com/photo-1448375240586-882707db888b, and https://images.unsplash.com/photo-1462331940025-496dfbfc7564. Real bookmarks use their webpage's Open Graph image when available.
