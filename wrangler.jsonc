@@ -1,0 +1,30 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "commonplace-library",
+  "account_id": "21f87364d3421347a19b5297942b5616",
+  "main": "worker/cloudflare.ts",
+  "compatibility_date": "2026-05-15",
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "workers_dev": true,
+  "preview_urls": false,
+  "assets": {
+    "binding": "ASSETS",
+    "run_worker_first": true
+  },
+  "observability": {
+    "enabled": true
+  },
+  "vars": {
+    "AUTH_PROVIDER": "password"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "commonplace-library",
+      "database_id": "e6e6977e-14ff-4191-ab5d-e9274b53f84a",
+      "migrations_dir": "drizzle"
+    }
+  ]
+}
