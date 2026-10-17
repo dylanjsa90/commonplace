@@ -36,6 +36,9 @@ yarn-error.log*
 
 # typescript
 next-env.d.ts
+*.tsbuildinfo
+.dev.vars*
+/.cloudflare/
 
 # Maintained Vite plugin and worker sources.
 !/build/
