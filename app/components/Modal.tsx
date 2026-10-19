@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useRef, type ReactNode } from "react";
 import { X } from "lucide-react";
+
 export default function Modal({
   title,
   onClose,
@@ -13,6 +14,7 @@ export default function Modal({
   wide?: boolean;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
+
   useEffect(() => {
     ref.current?.showModal();
     const original = document.body.style.overflow;
@@ -21,6 +23,7 @@ export default function Modal({
       document.body.style.overflow = original;
     };
   }, []);
+
   return (
     <dialog
       className={`modal ${wide ? "modal-wide" : ""}`}
